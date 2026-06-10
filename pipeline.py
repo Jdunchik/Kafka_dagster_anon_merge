@@ -425,6 +425,11 @@ _PRODUCT_TYPES = {
 }
 
 
+_SUBBRAND_DISC = {
+    "power", "proglide", "ultra", "pro", "plus", "active",
+    "max", "expert", "sensitive", "intense", "premium", "original",
+}
+
 def _product_type_conflict(ta: set, tb: set) -> bool:
     a_types = ta & _PRODUCT_TYPES
     b_types = tb & _PRODUCT_TYPES
@@ -453,6 +458,23 @@ def _extract_ply_rolls(name: str) -> tuple[str, str]:
     p, r = _PLY_RE.search(name), _ROLL_RE.search(name)
     return (p.group(1) if p else '', r.group(1) if r else '')
 
+
+_SHADE_RE = re.compile(r'\b(\d+\.\d+|\d{1,2}-\d{2,})\b')
+
+def _spec_shade_sig(name: str) -> frozenset:
+    return frozenset(m.group(1) for m in _SHADE_RE.finditer(_strip_meta(name)))
+
+
+_COUNT_RE = re.compile(
+    r'\b(\d+)\s*(штук[аи]?|кассет[аы]?|лезви[еяй]|шт)\b',
+    re.IGNORECASE,
+)
+
+def _spec_count_sig(name: str) -> frozenset:
+    return frozenset(
+        f"{m.group(1)}{m.group(2).lower()}"
+        for m in _COUNT_RE.finditer(_strip_meta(name))
+    )
 
 def _match_tokens(name: str) -> set:
     s = _strip_meta(name).lower().replace('ё', 'е')
@@ -630,20 +652,29 @@ def _fuzzy_matches(
     variants = [_extract_variants(n) for n in new_names]
     toks     = [_match_tokens(n) for n in new_names]
     plyrolls = [_extract_ply_rolls(n) for n in new_names]
+    shades = [_spec_shade_sig(n) for n in new_names]
+    counts = [_spec_count_sig(n) for n in new_names]
     df       = _doc_freq(all_unique)   # DF по всему корпусу, не только по новым именам
 
     pairs = [(i, j) for i, j in pairs if sizes[i] == sizes[j]]
     log_fn(f"  [Fuzzy] после фильтра по объёму/упаковке: {len(pairs)} пар")
 
+    pairs = [(i, j) for i, j in pairs if shades[i] == shades[j] and counts[i] == counts[j]]
+    log_fn(f"  [Fuzzy] после фильтра по коду оттенка/кол-ву: {len(pairs)} пар")
+
     pairs = [(i, j) for i, j in pairs if not _variant_conflict(variants[i], variants[j])]
     log_fn(f"  [Fuzzy] после фильтра по варианту: {len(pairs)} пар")
 
     def _gates_ok(i: int, j: int) -> bool:
+        diff = toks[i] ^ toks[j]
         return (sizes[i] == sizes[j]
                 and plyrolls[i] == plyrolls[j]
+                and shades[i] == shades[j]
+                and counts[i] == counts[j]
                 and not _variant_conflict(variants[i], variants[j])
                 and not _product_type_conflict(toks[i], toks[j])
-                and not any(df[t] <= rare_df for t in (toks[i] ^ toks[j])))
+                and not any(df[t] <= rare_df for t in diff)
+                and not any(t in _SUBBRAND_DISC for t in diff))
 
     pairs = [(i, j) for i, j in pairs if _gates_ok(i, j)]
     log_fn(f"  [Fuzzy] после дискрим. фильтра (rare_df={rare_df}): {len(pairs)} пар")
