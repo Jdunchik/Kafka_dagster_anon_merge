@@ -341,7 +341,7 @@ _SCENTS = [
     "ананас", "манго", "кокос", "имбирь", "корица", "гранат", "арбуз","груш",
     "дыня", "хлопок", "хвоя", "кедр", "сосна", "эвкалипт", "можжевельник",
     "ромашка", "алоэ", "coffee","ромашка", "алоэ", "coffee",
-    "ментол", "мята",
+    "ментол", "мята", "хлор",
 ]
 _COLORS = [
     "бесцветный", "шоколадный", "каштановый",
@@ -383,7 +383,7 @@ _VARIANT_CANON: dict[str, str] = {
 _VARIANT_TERMS = sorted(set(_SCENTS) | set(_COLORS), key=len, reverse=True)
 
 _VARIANT_RE = re.compile(
-    r'(?<!\w)(' + '|'.join(re.escape(t) for t in _VARIANT_TERMS) + r')[а-яё]{0,4}(?!\w)',
+    r'(?<!\w)(' + '|'.join(re.escape(t) for t in _VARIANT_TERMS) + r')[а-яёa-z]{0,4}(?!\w)',
     re.IGNORECASE,
 )
 
@@ -429,11 +429,6 @@ _TYPE_CANON = {
     "мицел":"мицелярная","мицелярка":"мицелярная",
 }
 
-def _product_type_conflict(ta: set, tb: set) -> bool:
-    a = {_TYPE_CANON.get(t, t) for t in ta & _PRODUCT_TYPES}
-    b = {_TYPE_CANON.get(t, t) for t in tb & _PRODUCT_TYPES}
-    return bool(a) and bool(b) and a != b
-
 
 _SUBBRAND_DISC = {
     "power", "proglide", "ultra", "pro", "plus","+", "active",
@@ -442,10 +437,12 @@ _SUBBRAND_DISC = {
     "super","young",
 }
 
-def _product_type_conflict(ta: set, tb: set) -> bool:
-    a_types = ta & _PRODUCT_TYPES
-    b_types = tb & _PRODUCT_TYPES
-    return bool(a_types) and bool(b_types) and a_types != b_types
+def _product_type_sig(name: str) -> frozenset:
+    toks = _norm_for_match(name).split()
+    return frozenset(_TYPE_CANON.get(t, t) for t in toks if t in _PRODUCT_TYPES)
+
+def _product_type_conflict(a: frozenset, b: frozenset) -> bool:
+    return bool(a) and bool(b) and a != b   # блок только если у обоих есть тип и они разные
 
 _SUPPLIER_RE   = re.compile(r'\([^0-9()]+\)')                    # "(Зарнарек)" — только текст, числа не трогаем
 _PACK_TAIL_RE  = re.compile(r':\s*\d+(?:\s*/\s*\d+)?\s*$')    # ":6/24" в конце — кор/паллета
@@ -471,6 +468,17 @@ _MODEL_NUM_RE = re.compile(
     r'(?!\s*(?:мл|л|г|гр?|кг|шт|уп|мг|ml|l|g|kg|pcs|pc))',
     re.IGNORECASE,
 )
+
+_DYE_CODE_RE = re.compile(r'\b(\d{1,2}[A-Za-z]{1,2})\b')
+
+def _dye_codes(name: str) -> frozenset:
+    s = _strip_meta(name)
+    if 'краск' not in s.lower():        # гейт только на красках, чтоб "3D" в стирке не ловить
+        return frozenset()
+    return frozenset(m.group(1).lower() for m in _DYE_CODE_RE.finditer(s))
+
+def _dye_conflict(a: frozenset, b: frozenset) -> bool:
+    return bool(a) and bool(b) and a != b
 
 def _spec_shade_sig(name: str) -> frozenset:
     s = _strip_meta(name)
@@ -688,6 +696,8 @@ def _fuzzy_matches(
     plyrolls = [_extract_ply_rolls(n) for n in new_names]
     shades = [_spec_shade_sig(n) for n in new_names]
     counts = [_spec_count_sig(n) for n in new_names]
+    ptypes = [_product_type_sig(n) for n in new_names]
+    dyes = [_dye_codes(n) for n in new_names]
     df       = _doc_freq(all_unique)   # DF по всему корпусу, не только по новым именам
 
     pairs = [(i, j) for i, j in pairs if sizes[i] == sizes[j]]
@@ -706,7 +716,8 @@ def _fuzzy_matches(
                 and shades[i] == shades[j]
                 and counts[i] == counts[j]
                 and not _variant_conflict(variants[i], variants[j])
-                and not _product_type_conflict(toks[i], toks[j])
+                and not _product_type_conflict(ptypes[i], ptypes[j])  # было toks[i], toks[j]
+                and not _dye_conflict(dyes[i], dyes[j])
                 and not any(df[t] <= rare_df for t in diff)
                 and not any(t in _SUBBRAND_DISC for t in diff))
 
