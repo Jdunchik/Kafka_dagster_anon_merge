@@ -1,13 +1,28 @@
-# ── Ядро (обязательно) ───────────────────────────────
+# core
 pandas
 openpyxl
+faker
+
+# xlsx engines (для .xls и .xlsb)
+xlrd
+pyxlsb
+
+# matching — TF-IDF (без этого упадёт на difflib, медленнее в 10-100x)
+scikit-learn
+numpy
+
+# matching — rapidfuzz (запасной вариант, быстрее difflib)
+rapidfuzz
+
+# matching — русская морфология (лемматизация токенов для гейтов)
+pymorphy3
+
+# transliterate (кириллица → латиница для TF-IDF, опционально)
+transliterate
+
+# dagster
 dagster
 dagster-webserver
-kafka-python
 
-# ── Опционально (расширяют возможности) ──────────────
-faker          # качественная генерация синтетических имён (ru_RU)
-scikit-learn   # лучший fuzzy-матчинг товаров (TF-IDF)
-rapidfuzz      # альтернативный fuzzy-матчинг (если нет sklearn)
-xlrd           # поддержка старого формата .xls
-pyxlsb         # поддержка формата .xlsb
+# kafka
+kafka-python
