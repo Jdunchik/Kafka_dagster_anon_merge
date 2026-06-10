@@ -1,19 +1,3 @@
-#!/usr/bin/env python3
-"""
-pipeline.py — Anonymize + merge retail tables in one pass
-──────────────────────────────────────────────────────────
-Reads ALL source files from input_folder, anonymizes each,
-merges into one xlsx, then moves originals to archive_folder.
-
-Required:  pip install pandas openpyxl
-Optional:  pip install faker    (better name generation)
-           pip install xlrd     (.xls support)
-           pip install pyxlsb   (.xlsb support)
-
-CLI:     python pipeline.py
-Dagster: see dagster_job.py — imports core functions from this module
-"""
-
 import sys
 import json
 import time
@@ -32,9 +16,9 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
-_Faker = None  # type: ignore[assignment]
+_Faker = None
 try:
-    from faker import Faker as _Faker  # type: ignore[assignment]
+    from faker import Faker as _Faker
     HAS_FAKER = True
 except ImportError:
     HAS_FAKER = False
@@ -297,26 +281,6 @@ def gen_product(key: str, category: str, fake_brand: str) -> str:
     )
     return f"{fake_brand} {descriptor} {r.choice(_VARIANTS)} {r.choice(_SIZES)}"
 
-
-# ── PRODUCT MATCHING (runs BEFORE anonymization) ──────────────────────────────
-#
-# Problem: store A calls it "Fairy Ориджинал 500мл", store B calls it
-#          "Фейри Original 0.5л посуда" → after anonymization they get
-#          different fake names → impossible to aggregate.
-#
-# Solution: two-pass pipeline.
-#   Pass 1 – read all raw files, collect item_names.
-#   Matching – map variants to a single canonical real name:
-#     Stage A – barcode-based (exact EAN match, zero false-positives).
-#     Stage B – TF-IDF char n-gram cosine similarity on normalized names
-#               (strips sizes/units so "500мл" vs "0.5л" stops mattering).
-#   Pass 2 – replace item_name in every DF with canonical, then anonymize.
-#             Now all variants share ONE fake name and can be grouped.
-#
-# Cache: product_matches.json stores {original → canonical} for non-trivial
-#        pairs only.  Human-reviewable and editable between runs.
-# ──────────────────────────────────────────────────────────────────────────────
-
 _SIZE_RE = re.compile(
     r'\b\d+[.,]?\d*\s*'
     r'(мл|л|г|гр|кг|шт|уп|мг|таб|капс|мм|см|ml|l|g|kg|pcs|pc|oz|fl\.oz)\b',
@@ -326,6 +290,15 @@ _NUM_RE  = re.compile(r'\b\d+\b')
 _JUNK_RE = re.compile(r'[^\w\s]')
 _WS_RE   = re.compile(r'\s+')
 
+_JUNK_WORDS = {
+    "новинка", "акция", "промо", "хит", "выгодно", "спецпредложение",
+    "арт", "артикул", "шк", "штрихкод", "new", "sale", "промоупаковка",
+}
+_JUNK_TOKEN_RE = re.compile(
+    r'(?<!\w)(' + '|'.join(re.escape(t) for t in _JUNK_WORDS) + r')(?!\w)',
+    re.IGNORECASE,
+)
+
 
 _SIZE_EXTRACT_RE = re.compile(
     r'(\d+[,.]?\d*)\s*(мл|л|г|гр|кг|шт|уп|мг|ml|l|g|kg|pcs|pc)\b',
@@ -334,63 +307,177 @@ _SIZE_EXTRACT_RE = re.compile(
 
 
 def _norm_for_match(name: str) -> str:
-    """Normalize product name for similarity comparison."""
-    s = str(name).lower().strip()
-    s = _SIZE_RE.sub(' ', s)      # "500мл" → " "
+    s = _strip_meta(name).lower().strip()   # без "(поставщик)" и хвоста ":6/24"
+    s = s.replace('ё', 'е')
+    s = _JUNK_TOKEN_RE.sub(' ', s)    # "акция", "новинка", "арт" и т.п.
+    s = _SIZE_RE.sub(' ', s)          # "500мл" → " "
     s = _NUM_RE.sub(' ', s)       # orphan numbers
     s = _JUNK_RE.sub(' ', s)      # punctuation
     s = _WS_RE.sub(' ', s).strip()
     return s
 
 
-def _extract_primary_size(name: str) -> str:
-    """
-    Extract and normalize the first size/volume/count token from a product name.
-    Returns canonical form: '500ml', '1000g', '20pcs', etc.
-    Returns '' if no size found.
-
-    Used as a gate: products with different sizes are never merged,
-    even when their names are otherwise similar (different pack = different SKU).
-
-    Examples:
-        "Fairy 500мл"       → '500ml'
-        "Fairy 0.5л"        → '500ml'   # same as above → allowed to match
-        "Fairy 1л"          → '1000ml'  # different → blocked
-        "Прокладки 10шт"    → '10pcs'
-        "Прокладки 20шт"    → '20pcs'   # different → blocked
-    """
-    m = _SIZE_EXTRACT_RE.search(name)
-    if not m:
-        return ''
+def _norm_unit(value: str, unit: str) -> str:
     try:
-        val = float(m.group(1).replace(',', '.'))
+        val = float(value.replace(',', '.'))
     except ValueError:
         return ''
-    unit = m.group(2).lower()
-    if unit in ('л', 'l'):
-        return f"{int(round(val * 1000))}ml"
-    if unit in ('мл', 'ml'):
-        return f"{int(round(val))}ml"
-    if unit in ('кг', 'kg'):
-        return f"{int(round(val * 1000))}g"
-    if unit in ('г', 'гр', 'g'):
-        return f"{int(round(val))}g"
-    if unit in ('мг',):
-        return f"{int(round(val))}mg"
-    if unit in ('шт', 'уп', 'pcs', 'pc'):
-        return f"{int(round(val))}pcs"
-    return f"{int(round(val))}{unit}"
+    u = unit.lower()
+    if u in ('л', 'l'):         return f"{int(round(val * 1000))}ml"
+    if u in ('мл', 'ml'):       return f"{int(round(val))}ml"
+    if u in ('кг', 'kg'):       return f"{int(round(val * 1000))}g"
+    if u in ('г', 'гр', 'g'):   return f"{int(round(val))}g"
+    if u == 'мг':               return f"{int(round(val))}mg"
+    if u in ('шт', 'уп', 'pcs', 'pc'): return f"{int(round(val))}pcs"
+    return f"{int(round(val))}{u}"
+
+
+_SIZE_LABEL_RE = re.compile(r'\b(XS|XXL?|XL|[SML])\b')   # прокладки/подгузники: S M L XL
+
+
+def _extract_size_signature(name: str) -> tuple:
+    """(мультипак, все остальные размеры): '2х50г'=='2штx50г', но 44шт ≠ 52шт."""
+    s = _strip_meta(name)
+    pack = ''
+    pm = _PACK_RE.search(s)
+    if pm:
+        unit = _norm_unit(pm.group(2), pm.group(3))
+        pack = f"{pm.group(1)}x{unit}" if unit else ''
+        s = s[:pm.start()] + ' ' + s[pm.end():]   # не считать 50г из "2х50г" дважды
+    extras = frozenset(
+        sz for m in _SIZE_EXTRACT_RE.finditer(s)
+        if (sz := _norm_unit(m.group(1), m.group(2)))
+    )
+    labels = frozenset(m.group(1).upper() for m in _SIZE_LABEL_RE.finditer(s))
+    return pack, extras, labels
+
+
+_PACK_RE = re.compile(
+    r'(\d+)\s*(?:[xх*]|шт\.?\s*(?:по|[*xх]))\s*(\d+[,.]?\d*)\s*'
+    r'(мл|л|г|гр|кг|шт|уп|мг|ml|l|g|kg|pcs|pc)\b',
+    re.IGNORECASE,
+)
+
+# Variant lexicon — for real product names before anonymization.
+# Phrases sorted longest-first by _VARIANT_TERMS so "зеленый чай" wins before bare "зеленый".
+_SCENTS = [
+    "morning freshness", "пион и сочные ягоды", "загадочный лотос",
+    "дивная магнолия", "чарующая ваниль", "свежий бриз", "морской бриз",
+    "морозная свежесть", "свежесть утра", "нежная свежесть", "розовая свежесть",
+    "горная свежесть", "весенняя свежесть", "горный родник", "океанский оазис",
+    "ледяные цветы", "цветы апельсина", "малазийский цветок", "яблочный пирог",
+    "сочные ягоды", "лесные ягоды", "сочная вишня", "сочный лимон",
+    "зеленый чай", "алоэ вера", "альпийский луг", "утренняя роса",
+    "свежий хлопок", "белые цветы",
+    "лаванда", "лаван", "лимон", "апельсин", "мандарин", "грейпфрут",
+    "цитрус", "лайм", "бергамот", "сакура", "орхидея", "магнолия",
+    "жасмин", "ландыш", "пион", "роза", "ваниль", "лотос", "сирень",
+    "ягоды", "вишня", "персик", "яблоко", "яблоня", "клубника", "банан",
+    "ананас", "манго", "кокос", "имбирь", "корица", "гранат", "арбуз",
+    "дыня", "хлопок", "хвоя", "кедр", "сосна", "эвкалипт", "можжевельник",
+    "ромашка", "алоэ", "coffee",
+]
+_COLORS = [
+    "бесцветный", "шоколадный", "каштановый",
+    # hair colors
+    "блонд", "блондин", "русый", "рыжий",
+    # fabric-care type labels — genitive forms ("для белого/черного") + nominative
+    "черного", "белого", "цветного", "темного",
+    "черный", "белый", "цветной", "темный", "колор", "color", "dark",
+    "розовый", "синий", "красный", "желтый", "голубой", "оранжевый",
+    "фиолетовый", "серый", "коричневый",
+]
+
+# map inflected forms → canonical so "белого" and "белый" don't conflict with each other
+_VARIANT_CANON: dict[str, str] = {
+    "белого": "белый", "белой": "белый", "белое": "белый",
+    "черного": "черный", "черной": "черный", "черное": "черный",
+    "цветного": "цветной", "темного": "темный",
+}
+_VARIANT_TERMS = sorted(set(_SCENTS) | set(_COLORS), key=len, reverse=True)
+_VARIANT_RE = re.compile(
+    r'(?<!\w)(' + '|'.join(re.escape(t) for t in _VARIANT_TERMS) + r')(?!\w)',
+    re.IGNORECASE,
+)
+
+STRICT_VARIANT_GATE = True   # False → блок только когда оба имеют варианты и они разные
+
+
+def _extract_variants(name: str) -> frozenset:
+    raw = _VARIANT_RE.findall(_norm_for_match(name))
+    return frozenset(_VARIANT_CANON.get(t, t) for t in raw)
+
+
+def _variant_conflict(a: frozenset, b: frozenset) -> bool:
+    if STRICT_VARIANT_GATE:
+        return a != b
+    # lenient: block only when both sides have detected variants and share none
+    return bool(a) and bool(b) and a.isdisjoint(b)
+
+
+# Взаимоисключающие типы продуктов — высокочастотные слова, которых не поймает DF-гейт.
+# Правило: если у обоих товаров есть тип И типы различаются → разные товары.
+_PRODUCT_TYPES = {
+    "шампунь", "бальзам", "кондиционер",                          # hair
+    "крем", "лосьон", "сыворотка", "гель", "пена", "спрей", "аэрозоль",  # skin/shave
+    "мусс", "порошок", "капсулы", "таблетки",                     # styling + laundry
+    "ноч", "ночн", "ночной", "днев", "дневн", "дневной",          # day/night creams
+}
+
+
+def _product_type_conflict(ta: set, tb: set) -> bool:
+    a_types = ta & _PRODUCT_TYPES
+    b_types = tb & _PRODUCT_TYPES
+    return bool(a_types) and bool(b_types) and a_types != b_types
+
+
+# ── Дискриминирующий токен-гейт ──────────────────────────────────────────────
+# Идея: если у двух товаров есть РЕДКОЕ слово, которого нет у другого, — это разные
+# товары (вкус/ингредиент/суббренд/сам бренд). Лексикон вариантов перечислить нельзя,
+# а редкость слова по корпусу — общий признак различия.
+
+_SUPPLIER_RE   = re.compile(r'\([^0-9()]+\)')                    # "(Зарнарек)" — только текст, числа не трогаем
+_PACK_TAIL_RE  = re.compile(r':\s*\d+(?:\s*/\s*\d+)?\s*$')    # ":6/24" в конце — кор/паллета
+_EMBED_SIZE_RE = re.compile(r'\d+[.,]?\d*\s*(?:мл|л|гр?|кг|шт|уп|мг|ml|l|kg)\b', re.IGNORECASE)
+_PLY_RE  = re.compile(r'(\d+)\s*сл\b',  re.IGNORECASE)        # слои туалетной бумаги
+_ROLL_RE = re.compile(r'(\d+)\s*рул\b', re.IGNORECASE)        # рулоны
+
+RARE_DF = 3  # слово «различающее», если встречается не больше чем в RARE_DF товарах
+
+
+def _strip_meta(name: str) -> str:
+    return _SUPPLIER_RE.sub(' ', _PACK_TAIL_RE.sub('', str(name)))
+
+
+def _extract_ply_rolls(name: str) -> tuple[str, str]:
+    p, r = _PLY_RE.search(name), _ROLL_RE.search(name)
+    return (p.group(1) if p else '', r.group(1) if r else '')
+
+
+def _match_tokens(name: str) -> set:
+    s = _strip_meta(name).lower().replace('ё', 'е')
+    s = _JUNK_TOKEN_RE.sub(' ', s)   # "акция"/"новинка" не должны различать товары
+    s = _EMBED_SIZE_RE.sub(' ', s)   # "успокаивающая20г" → "успокаивающая"
+    s = _JUNK_RE.sub(' ', s)
+    s = _NUM_RE.sub(' ', s)
+    return {t for t in s.split() if len(t) >= 3}
+
+
+def _doc_freq(names: list[str]) -> Counter:
+    df: Counter = Counter()
+    for n in names:
+        for t in _match_tokens(n):
+            df[t] += 1
+    return df
 
 
 def load_product_matches() -> dict:
-    """Load cached {original_name: canonical_name} from product_matches.json."""
     if not PRODUCT_MATCHES_PATH.exists():
         return {}
     return json.loads(PRODUCT_MATCHES_PATH.read_text(encoding="utf-8"))
 
 
 def save_product_matches(matches: dict):
-    """Persist only non-trivial matches (where canonical differs from original)."""
     non_trivial = {k: v for k, v in matches.items() if k != v}
     PRODUCT_MATCHES_PATH.write_text(
         json.dumps(non_trivial, ensure_ascii=False, indent=2),
@@ -399,7 +486,6 @@ def save_product_matches(matches: dict):
 
 
 def _union_find(n: int, pairs: list[tuple[int, int]]) -> dict[int, list[int]]:
-    """Union-Find: returns {root_idx: [member_indices]}."""
     parent = list(range(n))
 
     def find(x: int) -> int:
@@ -423,11 +509,6 @@ def _barcode_matches(
     raw_frames: list,
     log_fn: Callable[[str], None] = print,
 ) -> dict:
-    """
-    Stage A: barcode → canonical name.
-    Same EAN in different stores = same product, zero ambiguity.
-    Returns {variant_name: canonical_name} for multi-name barcodes only.
-    """
     all_names: list[str] = []
     barcode_to_names: dict = defaultdict(list)
 
@@ -437,7 +518,7 @@ def _barcode_matches(
         if ic and ic in df.columns:
             all_names.extend(df[ic].dropna().astype(str).str.strip().tolist())
         if bc and ic and bc in df.columns and ic in df.columns:
-            ic_col, bc_col = str(ic), str(bc)   # narrow str|None → str for type checker
+            ic_col, bc_col = str(ic), str(bc)
             sub = df[[bc_col, ic_col]].dropna()
             for _, row in sub.iterrows():
                 bv = str(row[bc_col]).strip()
@@ -468,11 +549,8 @@ def _fuzzy_matches(
     existing: dict,
     threshold: float,
     log_fn: Callable[[str], None] = print,
+    rare_df: int = RARE_DF,
 ) -> dict:
-    """
-    Stage B: fuzzy name similarity for products not covered by barcode matching.
-    Priority: sklearn TF-IDF (best) → rapidfuzz token_set_ratio → difflib (built-in).
-    """
     all_unique = list({str(n).strip() for n in item_names
                        if pd.notna(n) and str(n).strip()})
     new_names  = [n for n in all_unique if n not in existing]
@@ -490,27 +568,25 @@ def _fuzzy_matches(
     norms = [_norm_for_match(n) for n in new_names]
     freq  = Counter(str(n).strip() for n in item_names if pd.notna(n))
     pairs: list[tuple[int, int]] = []
-    method = "difflib"  # default; overwritten below when better lib found
+    method = "difflib"
 
-    # ── Detect available library once, then run ──────────────────────────────
     _sklearn_ok   = False
     _rapidfuzz_ok = False
     try:
         import sklearn.feature_extraction.text  # noqa: F401
-        import numpy                            # noqa: F401
+        import numpy                             # noqa: F401
         _sklearn_ok = True
     except ImportError:
         pass
 
     if not _sklearn_ok:
         try:
-            import rapidfuzz  # noqa: F401
+            import rapidfuzz
             _rapidfuzz_ok = True
         except ImportError:
             pass
 
     if _sklearn_ok:
-        # ── sklearn TF-IDF (recommended) ─────────────────────────────────────
         from sklearn.feature_extraction.text import TfidfVectorizer
         import numpy as np
 
@@ -531,7 +607,6 @@ def _fuzzy_matches(
         method = "TF-IDF/sklearn"
 
     elif _rapidfuzz_ok:
-        # ── rapidfuzz ────────────────────────────────────────────────────────
         from rapidfuzz import fuzz as _fuzz
 
         for i in range(len(new_names)):
@@ -542,7 +617,6 @@ def _fuzzy_matches(
         method = "rapidfuzz"
 
     else:
-        # ── difflib fallback (built-in, O(N²), slow on large sets) ───────────
         for i in range(len(new_names)):
             for j in range(i + 1, len(new_names)):
                 if difflib.SequenceMatcher(None, norms[i], norms[j]).ratio() >= threshold:
@@ -552,19 +626,44 @@ def _fuzzy_matches(
 
     log_fn(f"  [Fuzzy] метод: {method}, найдено пар до фильтра: {len(pairs)}")
 
-    # ── Size gate: разный объём/количество = разный SKU, не матчить ──────────
-    # Normalizes "0.5л" == "500мл" so unit variants still match,
-    # but "500мл" ≠ "1000мл" and "10шт" ≠ "20шт" are blocked.
-    sizes = [_extract_primary_size(n) for n in new_names]
+    sizes    = [_extract_size_signature(n) for n in new_names]
+    variants = [_extract_variants(n) for n in new_names]
+    toks     = [_match_tokens(n) for n in new_names]
+    plyrolls = [_extract_ply_rolls(n) for n in new_names]
+    df       = _doc_freq(all_unique)   # DF по всему корпусу, не только по новым именам
+
     pairs = [(i, j) for i, j in pairs if sizes[i] == sizes[j]]
-    log_fn(f"  [Fuzzy] после фильтра по объёму: {len(pairs)} пар")
+    log_fn(f"  [Fuzzy] после фильтра по объёму/упаковке: {len(pairs)} пар")
+
+    pairs = [(i, j) for i, j in pairs if not _variant_conflict(variants[i], variants[j])]
+    log_fn(f"  [Fuzzy] после фильтра по варианту: {len(pairs)} пар")
+
+    def _gates_ok(i: int, j: int) -> bool:
+        return (sizes[i] == sizes[j]
+                and plyrolls[i] == plyrolls[j]
+                and not _variant_conflict(variants[i], variants[j])
+                and not _product_type_conflict(toks[i], toks[j])
+                and not any(df[t] <= rare_df for t in (toks[i] ^ toks[j])))
+
+    pairs = [(i, j) for i, j in pairs if _gates_ok(i, j)]
+    log_fn(f"  [Fuzzy] после дискрим. фильтра (rare_df={rare_df}): {len(pairs)} пар")
 
     clusters = _union_find(len(new_names), pairs)
     result   = dict(existing)
     n_merged = 0
 
     for indices in clusters.values():
-        group     = [new_names[i] for i in indices]
+        # разрыв цепочек A~B~C: член остаётся в кластере, только если гейты проходят
+        # против ВСЕХ уже принятых. Similarity транзитивной быть может, гейты — нет.
+        ranked = sorted(indices, key=lambda i: -freq.get(new_names[i], 0))
+        kept: list[int] = []
+        for i in ranked:
+            if all(_gates_ok(i, k) for k in kept):
+                kept.append(i)
+            else:
+                result[new_names[i]] = new_names[i]   # выпал из цепочки → сам по себе
+
+        group     = [new_names[i] for i in kept]
         canonical = max(group, key=lambda nm: freq.get(nm, 0))
         for nm in group:
             result[nm] = canonical
@@ -581,19 +680,15 @@ def run_product_matching(
     raw_frames: list,
     threshold: float = 0.82,
     log_fn: Callable[[str], None] = print,
+    rare_df: int = RARE_DF,
 ) -> dict:
-    """
-    Full two-stage product matching.
-    Returns {original_name: canonical_name} (complete mapping).
-    Loads existing cache, processes only new names, saves back.
-    """
+
     matches = load_product_matches()
 
     # Stage A: barcode
     bc_m = _barcode_matches(raw_frames, log_fn)
     matches.update(bc_m)
 
-    # Collect all item_names (applying barcode fixes already)
     all_names: list[str] = []
     for _, df, col in raw_frames:
         ic = col.get("item_name")
@@ -603,14 +698,13 @@ def run_product_matching(
 
     # Stage B: fuzzy name
     if all_names:
-        matches = _fuzzy_matches(all_names, matches, threshold, log_fn)
+        matches = _fuzzy_matches(all_names, matches, threshold, log_fn, rare_df)
 
     save_product_matches(matches)
     return matches
 
 
 def apply_product_matches(df: pd.DataFrame, col: dict, matches: dict) -> pd.DataFrame:
-    """Replace item_name values with their canonical names in-place."""
     ic = col.get("item_name")
     if ic and ic in df.columns:
         df[ic] = df[ic].astype(str).str.strip().map(lambda n: matches.get(n, n))
@@ -677,7 +771,6 @@ def save_mappings(m: dict):
     MAPPINGS_PATH.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def build_mappings(df: pd.DataFrame, col: dict, m: dict, log_fn: Callable[[str], None]) -> dict:
-    """col: {canonical_name → actual_df_column_name}"""
     key_col = col.get("store_code") or col.get("store_name")
     used_names = {v["name"] for v in m["stores"].values()}
     new_s = 0
@@ -733,9 +826,6 @@ def build_mappings(df: pd.DataFrame, col: dict, m: dict, log_fn: Callable[[str],
     log_fn(f"  Товары: +{new_p} новых (кэш: {len(m['products'])})")
     return m
 
-
-# ── COLUMN MAPPING (fuzzy only, no external API) ───────────────────────────────
-
 def _normalize(col: str) -> str:
     s = col.lower().strip()
     for suffix in [" с ндс", " без ндс", ". с ндс", " с nds", " incl. vat", " excl. vat"]:
@@ -762,8 +852,7 @@ def fuzzy_map(actual_cols: list) -> dict:
     return result
 
 def get_col_map(df: pd.DataFrame) -> dict:
-    """Returns {canonical_name → actual_df_column}  (fuzzy matching only)"""
-    raw = fuzzy_map(list(df.columns))          # {actual: canonical}
+    raw = fuzzy_map(list(df.columns))
     canon_to_actual: dict = {}
     for act_col, cname in raw.items():
         if cname and cname not in canon_to_actual:
@@ -774,7 +863,6 @@ def get_col_map(df: pd.DataFrame) -> dict:
 # ── TRANSFORM ──────────────────────────────────────────────────────────────────
 
 def transform(df: pd.DataFrame, col: dict, m: dict) -> pd.DataFrame:
-    """Apply all transforms and rename columns to English canonical names."""
     sc   = col.get("store_code")
     sn_c = col.get("store_name")
     sa_c = col.get("address")
@@ -833,7 +921,6 @@ def transform(df: pd.DataFrame, col: dict, m: dict) -> pd.DataFrame:
 # ── COLLECT & ARCHIVE ──────────────────────────────────────────────────────────
 
 def collect_source_files(folder: Path) -> list[Path]:
-    """Return sorted list of supported files in folder."""
     return sorted(
         f for f in folder.iterdir()
         if f.is_file() and f.suffix.lower() in SUPPORTED_EXTS
@@ -844,7 +931,6 @@ def archive_source_files(
     archive_folder,
     log_fn: Callable[[str], None] = print,
 ) -> int:
-    """Move source files to archive_folder. Returns count of moved files."""
     archive_folder = Path(archive_folder)
     archive_folder.mkdir(parents=True, exist_ok=True)
     moved = 0
@@ -871,22 +957,8 @@ def read_and_anonymize(
     log_fn: Callable[[str], None] = print,
     product_match: bool = True,
     product_match_threshold: float = 0.82,
+    product_match_rare_df: int = RARE_DF,
 ) -> list[tuple[str, pd.DataFrame]]:
-    """
-    Read and anonymize every file.
-
-    If product_match=True (default), runs two-pass processing:
-      Pass 1 – read all files into memory, build raw col_maps.
-      Match  – deduplicate product names across all files (barcode + fuzzy).
-               Writes/updates product_matches.json.
-      Pass 2 – apply canonical names, build anonymization mappings, transform.
-
-    This guarantees that product variants from different stores get the
-    same fake name and can be aggregated in merge_anonymized.
-
-    Returns list of (filename, anonymized_df) tuples.
-    Files that fail to read are skipped (logged as errors).
-    """
     m = load_mappings()
     log_fn(
         f"Маппинги загружены: магазины={len(m['stores'])}, бренды={len(m['brands'])}, "
@@ -894,7 +966,7 @@ def read_and_anonymize(
     )
 
     # ── Pass 1: read all files ─────────────────────────────────────────────────
-    raw_frames: list = []   # (path, df, col_map)
+    raw_frames: list = []
     for path in files:
         try:
             log_fn(f"📖 {path.name}")
@@ -923,6 +995,7 @@ def read_and_anonymize(
             raw_frames,
             threshold=product_match_threshold,
             log_fn=log_fn,
+            rare_df=product_match_rare_df,
         )
         total_mapped = sum(1 for k, v in matches.items() if k != v)
         log_fn(f"   Всего нетривиальных матчей в кэше: {total_mapped}")
@@ -957,14 +1030,6 @@ def merge_anonymized(
     log_fn: Callable[[str], None] = print,
     aggregate: bool = True,
 ) -> pd.DataFrame:
-    """
-    Find column intersection across all frames, concat, then aggregate.
-
-    Aggregation (aggregate=True by default):
-      group by all dimension columns, sum qty_sold / sales_rub / cost_rub.
-      This collapses rows that refer to the same product/store/week after
-      product matching unified their names.
-    """
     file_cols = {fname: list(df.columns) for fname, df in frames}
 
     col_sets = [set(cols) for cols in file_cols.values()]
@@ -996,7 +1061,6 @@ def merge_anonymized(
         group_cols  = [c for c in merged.columns if c not in metric_cols]
 
         if metric_cols and group_cols:
-            # Ensure metrics are numeric before groupby
             for mc in metric_cols:
                 numeric: pd.Series = pd.to_numeric(merged[mc], errors="coerce")
                 merged[mc] = numeric.fillna(0)
@@ -1007,7 +1071,6 @@ def merge_anonymized(
                 .agg({mc: "sum" for mc in metric_cols})
             )
 
-            # Restore DESIRED_ORDER after groupby
             ordered2 = [c for c in DESIRED_ORDER if c in merged.columns]
             extras2  = [c for c in merged.columns if c not in ordered2]
             merged   = merged[ordered2 + extras2]
@@ -1029,7 +1092,6 @@ def save_merged(
     filename: str = "",
     log_fn: Callable[[str], None] = print,
 ) -> Path:
-    """Save merged DataFrame as formatted xlsx. Returns output path."""
     output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
     if not filename:
@@ -1051,6 +1113,7 @@ def load_config() -> dict:
         "output_folder": "",
         "product_match": True,
         "product_match_threshold": 0.82,
+        "product_match_rare_df": RARE_DF,
     }
     if CONFIG_PATH.exists():
         try:
@@ -1061,7 +1124,6 @@ def load_config() -> dict:
     return defaults
 
 def save_config(cfg: dict):
-    """Merge cfg into config.json, preserving unrelated keys."""
     existing: dict = {}
     if CONFIG_PATH.exists():
         try:
@@ -1164,6 +1226,7 @@ def main():
         log_fn=log,
         product_match=cfg.get("product_match", True),
         product_match_threshold=cfg.get("product_match_threshold", 0.82),
+        product_match_rare_df=cfg.get("product_match_rare_df", RARE_DF),
     )
 
     if not frames:
