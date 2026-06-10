@@ -16,12 +16,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
-_Faker = None
-try:
-    from faker import Faker as _Faker
-    HAS_FAKER = True
-except ImportError:
-    HAS_FAKER = False
+from faker import Faker as _Faker
 
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
@@ -150,42 +145,7 @@ _STORE_WORDS = [
     "Курган","Равнина","Перекрёсток","Рубеж","Форт","Цитадель","Твердыня",
     "Авангард","Арьергард","Резерв","Запас","Клад","Сокровище","Копилка",
 ]
-_CO_FIRST  = [
-    "Центр","Север","Юг","Восток","Запад","Главный","Новый","Первый",
-    "Элит","Прайм","Мега","Гранд","Альфа","Бета","Омега","Кристалл",
-    "Союз","Стандарт","Профи","Базис","Контур","Спектр","Горизонт","Форс",
-    "Пром","Агро","Техно","Логис","Дата","Инфо","Медиа","Рапид",
-]
-_CO_SECOND = [
-    "Торг","Пром","Продукт","Ресурс","Групп","Логистик","Поставк",
-    "Холдинг","Инвест","Сервис","Маркет","Снаб","Трейд","Партнер",
-    "Дистриб","Агент","Брокер","Посред","Интер","Экспо","Конс","Финанс",
-    "Опт","Ритейл","Дилер","Транс","Экспрес","Систем","Решен","Технол",
-]
-_CO_LEGAL = ["ООО","АО","ЗАО","ПАО"]
-_REGIONS = [
-    "Ростовская обл.","Краснодарский край","Воронежская обл.",
-    "Волгоградская обл.","Белгородская обл.","Ставропольский край",
-    "Тамбовская обл.","Саратовская обл.","Липецкая обл.",
-    "Курская обл.","Орловская обл.","Тульская обл.","Рязанская обл.",
-    "Пензенская обл.","Ульяновская обл.","Самарская обл.","Нижегородская обл.",
-]
-_CITIES = [
-    "Таганрог","Шахты","Батайск","Волгодонск","Азов","Зверево","Гуково",
-    "Каменск-Шахтинский","Сальск","Морозовск","Цимлянск","Константиновск",
-    "Аксай","Кропоткин","Ейск","Тихорецк","Армавир","Белая Калитва","Миллерово",
-    "Семикаракорск","Новоалександровск","Невинномысск","Будённовск","Лермонтов",
-    "Михайловск","Благодарный","Апшеронск","Горячий Ключ","Тимашевск","Темрюк",
-    "Геленджик","Анапа","Туапсе","Абинск","Славянск-на-Кубани","Кореновск",
-]
-_STREET_TYPES = ["улица","переулок","проспект","бульвар","площадь","набережная","шоссе"]
-_STREET_NAMES = [
-    "Садовая","Московская","Ленинская","Центральная","Советская","Строительная",
-    "Молодёжная","Школьная","Лесная","Полевая","Мирная","Победы","Комсомольская",
-    "Гагарина","Пушкина","Чехова","Горького","Кирова","Дружбы","Заречная",
-    "Набережная","Рабочая","Колхозная","Крестьянская","Революционная","Октябрьская",
-    "Первомайская","Красная","Зелёная","Берёзовая","Сосновая","Луговая","Степная",
-]
+
 _DESCRIPTORS = {
     "посуд":     ["Средство для мытья посуды","Гель для посуды","Жидкость для посуды","Бальзам для посуды"],
     "чистящ":    ["Крем чистящий","Средство чистящее","Порошок чистящий","Паста чистящая"],
@@ -218,8 +178,6 @@ def _rng(key: str) -> random.Random:
     return random.Random(_seed(key))
 
 def _faker(key: str):
-    if not HAS_FAKER:
-        return None
     f = _Faker("ru_RU")
     f.seed_instance(_seed(key))
     return f
@@ -231,16 +189,8 @@ def gen_store(key: str, used_names: set) -> dict:
     name, n = base, 1
     while name in used_names:
         name = base + str(n); n += 1
-    address = ""  # always initialized; overwritten below
-    if f:
-        try:
-            address = f"{f.region()}, {f.city()}, {f.street_name()}, {f.building_number()}"
-        except Exception:
-            f = None
-    if not f or not address:
-        address = (f"{r.choice(_REGIONS)}, {r.choice(_CITIES)}, "
-                   f"{r.choice(_STREET_NAMES)} {r.choice(_STREET_TYPES)}, {r.randint(1, 200)}")
-    return {"name": name, "address": address}
+    addr = f"{f.region()}, {f.city()}, {f.street_name()}, {f.building_number()}"
+    return {"name": name, "address": addr}
 
 def gen_brand(key: str, used: set) -> str:
     r = _rng(key)
@@ -252,24 +202,12 @@ def gen_brand(key: str, used: set) -> str:
 
 def gen_company(key: str, used: set = None) -> str:
     f = _faker(key)
-    if f:
-        try:
-            base = f.company()
-            if used is None:
-                return base
-            cand, n = base, 1
-            while cand in used:
-                cand = f"{base} {n}"; n += 1
-            return cand
-        except Exception:
-            pass
-    r = _rng(key)
-    base = f"{r.choice(_CO_FIRST)}{r.choice(_CO_SECOND)} {r.choice(_CO_LEGAL)}"
+    base = f.company()
     if used is None:
         return base
     cand, n = base, 1
     while cand in used:
-        cand = base + str(n); n += 1
+        cand = f"{base} {n}"; n += 1
     return cand
 
 def gen_product(key: str, category: str, fake_brand: str) -> str:
@@ -316,6 +254,26 @@ def _norm_for_match(name: str) -> str:
     s = _WS_RE.sub(' ', s).strip()
     return s
 
+_translit = None
+
+def _to_latin(s: str) -> str:
+    global _translit
+    if _translit is None:
+        try:
+            from transliterate import translit
+            _translit = translit
+        except ImportError:
+            _translit = False
+    if not _translit:
+        return s
+    try:
+        return _translit(s, 'ru', reversed=True)
+    except Exception:
+        return s
+
+def _norm_for_tfidf(name: str) -> str:
+
+    return _to_latin(_norm_for_match(name))
 
 def _norm_unit(value: str, unit: str) -> str:
     try:
@@ -332,18 +290,23 @@ def _norm_unit(value: str, unit: str) -> str:
     return f"{int(round(val))}{u}"
 
 
-_SIZE_LABEL_RE = re.compile(r'\b(XS|XXL?|XL|[SML])\b')   # прокладки/подгузники: S M L XL
+_SIZE_LABEL_RE = re.compile(r'\b(XS|XXL?|XL|[SML])\b')
 
 
 def _extract_size_signature(name: str) -> tuple:
-    """(мультипак, все остальные размеры): '2х50г'=='2штx50г', но 44шт ≠ 52шт."""
     s = _strip_meta(name)
     pack = ''
     pm = _PACK_RE.search(s)
     if pm:
         unit = _norm_unit(pm.group(2), pm.group(3))
         pack = f"{pm.group(1)}x{unit}" if unit else ''
-        s = s[:pm.start()] + ' ' + s[pm.end():]   # не считать 50г из "2х50г" дважды
+        s = s[:pm.start()] + ' ' + s[pm.end():]
+    else:
+        pm2 = _REV_PACK_RE.search(s)
+        if pm2:
+            unit = _norm_unit(pm2.group(1), pm2.group(2))
+            pack = f"{pm2.group(3)}x{unit}" if unit else ''
+            s = s[:pm2.start()] + ' ' + s[pm2.end():]
     extras = frozenset(
         sz for m in _SIZE_EXTRACT_RE.finditer(s)
         if (sz := _norm_unit(m.group(1), m.group(2)))
@@ -351,15 +314,17 @@ def _extract_size_signature(name: str) -> tuple:
     labels = frozenset(m.group(1).upper() for m in _SIZE_LABEL_RE.finditer(s))
     return pack, extras, labels
 
-
 _PACK_RE = re.compile(
     r'(\d+)\s*(?:[xх*]|шт\.?\s*(?:по|[*xх]))\s*(\d+[,.]?\d*)\s*'
     r'(мл|л|г|гр|кг|шт|уп|мг|ml|l|g|kg|pcs|pc)\b',
     re.IGNORECASE,
 )
 
-# Variant lexicon — for real product names before anonymization.
-# Phrases sorted longest-first by _VARIANT_TERMS so "зеленый чай" wins before bare "зеленый".
+_REV_PACK_RE = re.compile(
+    r'(\d+[,.]?\d*)\s*(мл|л|г|гр|кг|шт|уп|мг|ml|l|g|kg|pcs|pc)\s*[хx×*]\s*(\d+)\b',
+    re.IGNORECASE,
+)
+
 _SCENTS = [
     "morning freshness", "пион и сочные ягоды", "загадочный лотос",
     "дивная магнолия", "чарующая ваниль", "свежий бриз", "морской бриз",
@@ -373,32 +338,62 @@ _SCENTS = [
     "цитрус", "лайм", "бергамот", "сакура", "орхидея", "магнолия",
     "жасмин", "ландыш", "пион", "роза", "ваниль", "лотос", "сирень",
     "ягоды", "вишня", "персик", "яблоко", "яблоня", "клубника", "банан",
-    "ананас", "манго", "кокос", "имбирь", "корица", "гранат", "арбуз",
+    "ананас", "манго", "кокос", "имбирь", "корица", "гранат", "арбуз","груш",
     "дыня", "хлопок", "хвоя", "кедр", "сосна", "эвкалипт", "можжевельник",
-    "ромашка", "алоэ", "coffee",
+    "ромашка", "алоэ", "coffee","ромашка", "алоэ", "coffee",
+    "ментол", "мята",
 ]
 _COLORS = [
     "бесцветный", "шоколадный", "каштановый",
-    # hair colors
     "блонд", "блондин", "русый", "рыжий",
-    # fabric-care type labels — genitive forms ("для белого/черного") + nominative
     "черного", "белого", "цветного", "темного",
     "черный", "белый", "цветной", "темный", "колор", "color", "dark",
     "розовый", "синий", "красный", "желтый", "голубой", "оранжевый",
-    "фиолетовый", "серый", "коричневый",
+    "фиолетовый", "серый", "коричневый","бел","чер","черн","цвет",
+    "цв","тем","col","шок","каш","блон","рыж","роз","син","крас",
+    "жел","голуб","гол","оранж","фиол","сер","кор",
+    "white", "black", "colored", "dark", "pink", "blue", "red", "yellow",
+    "cyan", "orange", "purple", "gray", "brown", "chocolate", "chestnut",
+    "blond", "ginger",
+    "муж","мужской","мал","мальчиков","мальч","девоч","дев","девочек",
+    "жен","женский",
+    "жир","жирной","жирных","сух","сухих","сухой","норм","норма","нормальной","ног","рук",
+    "окр","окрашенных","поврежд","повреж","поврежденных","увлаж","увлажняющий",
+    "увлажняющая","омолаж","омолаживающий","м","ж",
 ]
 
-# map inflected forms → canonical so "белого" and "белый" don't conflict with each other
 _VARIANT_CANON: dict[str, str] = {
-    "белого": "белый", "белой": "белый", "белое": "белый",
-    "черного": "черный", "черной": "черный", "черное": "черный",
-    "цветного": "цветной", "темного": "темный",
+    "белого": "белый", "белой": "белый", "белое": "белый","бел":"белый",
+    "черного": "черный", "черной": "черный", "черное": "черный","чер":"черный","черн":"черный",
+    "цветного": "цветной","цвет":"цветной","цв":"цветной", "темного": "темный","тем":"темный",
+    "колор": "color","col":"color","шок":"шоколадный","каш":"каштановый",
+    "блон":"блонд","блондин":"блонд","рыж":"рыжий","роз":"розовый","син":"синий","крас":"красный",
+    "жел":"желтый","голуб":"голубой","гол":"голубой","оранж":"оранжевый","фиол":"фиолетовый","сер":"серый",
+    "кор":"коричневый","white": "белый", "black": "черный", "colored": "цветной", "dark": "темный",
+    "pink": "розовый", "blue": "синий", "red": "красный", "yellow": "желтый",
+    "cyan": "голубой", "orange": "оранжевый", "purple": "фиолетовый",
+    "gray": "серый", "brown": "коричневый", "chocolate": "шоколадный",
+    "chestnut": "каштановый", "blond": "блонд", "ginger": "рыжий","муж":"мужской",
+    "жен":"женский","мал":"мужской","мальчиков":"мужской","дев":"женский",
+    "девочек":"женский","мальч":"мужской","девоч":"женский","жир":"жирной","сух":"сухой","сухих":"сухой",
+    "жирных":"жирной","окр":"окрашенных","поврежд":"поврежденных","повреж":"поврежденных",
+    "увлаж":"увлажняющая","увлажняющий":"увлажняющая","омолаж":"омолаживающий",
+    "ж":"женский","м":"мужской","норма":"нормальной","норм":"нормальной",
 }
 _VARIANT_TERMS = sorted(set(_SCENTS) | set(_COLORS), key=len, reverse=True)
+
 _VARIANT_RE = re.compile(
-    r'(?<!\w)(' + '|'.join(re.escape(t) for t in _VARIANT_TERMS) + r')(?!\w)',
+    r'(?<!\w)(' + '|'.join(re.escape(t) for t in _VARIANT_TERMS) + r')[а-яё]{0,4}(?!\w)',
     re.IGNORECASE,
 )
+
+def _extract_variants(name: str) -> frozenset:
+    s = _norm_for_match(name)
+    found = set(_VARIANT_RE.findall(s))
+    lem = ' '.join(_lemma(t).replace('ё', 'е') for t in s.split())
+    if lem != s:
+        found |= set(_VARIANT_RE.findall(lem))
+    return frozenset(_VARIANT_CANON.get(t, t) for t in found)
 
 STRICT_VARIANT_GATE = True   # False → блок только когда оба имеют варианты и они разные
 
@@ -418,28 +413,39 @@ def _variant_conflict(a: frozenset, b: frozenset) -> bool:
 # Взаимоисключающие типы продуктов — высокочастотные слова, которых не поймает DF-гейт.
 # Правило: если у обоих товаров есть тип И типы различаются → разные товары.
 _PRODUCT_TYPES = {
-    "шампунь", "бальзам", "кондиционер",                          # hair
-    "крем", "лосьон", "сыворотка", "гель", "пена", "спрей", "аэрозоль",  # skin/shave
-    "мусс", "порошок", "капсулы", "таблетки",                     # styling + laundry
-    "ноч", "ночн", "ночной", "днев", "дневн", "дневной",          # day/night creams
+    "шампунь", "шамп", "бальзам", "бальз", "кондиционер", "конд",
+    "крем", "лосьон", "сыворотка", "гель", "пена", "спрей", "аэрозоль","аэроз",
+    "мусс", "порошок","соль", "капсула", "таблетка",
+    "ночной", "ноч", "ночные","дневной", "днев","дневные", "мыло",
+    "день","ночь","бал","шам","дн","ночн","стик","шар",
+    "мицел","мицелярка","мицелярная","тоник",
 }
+
+_TYPE_CANON = {
+    "шамп": "шампунь", "бальз": "бальзам", "конд": "кондиционер",
+    "ноч": "ночной", "днев": "дневной","день":"дневной","дневные":"дневной",
+    "ночь":"ночной","ночные":"ночной",
+    "бал":"бальзам","шам":"шампунь","дн":"дневной","ночн":"ночой",
+    "мицел":"мицелярная","мицелярка":"мицелярная",
+}
+
+def _product_type_conflict(ta: set, tb: set) -> bool:
+    a = {_TYPE_CANON.get(t, t) for t in ta & _PRODUCT_TYPES}
+    b = {_TYPE_CANON.get(t, t) for t in tb & _PRODUCT_TYPES}
+    return bool(a) and bool(b) and a != b
 
 
 _SUBBRAND_DISC = {
-    "power", "proglide", "ultra", "pro", "plus", "active",
+    "power", "proglide", "ultra", "pro", "plus","+", "active",
     "max", "expert", "sensitive", "intense", "premium", "original",
+    "light", "large", "normal", "maxi", "mini", "night","extra",
+    "super","young",
 }
 
 def _product_type_conflict(ta: set, tb: set) -> bool:
     a_types = ta & _PRODUCT_TYPES
     b_types = tb & _PRODUCT_TYPES
     return bool(a_types) and bool(b_types) and a_types != b_types
-
-
-# ── Дискриминирующий токен-гейт ──────────────────────────────────────────────
-# Идея: если у двух товаров есть РЕДКОЕ слово, которого нет у другого, — это разные
-# товары (вкус/ингредиент/суббренд/сам бренд). Лексикон вариантов перечислить нельзя,
-# а редкость слова по корпусу — общий признак различия.
 
 _SUPPLIER_RE   = re.compile(r'\([^0-9()]+\)')                    # "(Зарнарек)" — только текст, числа не трогаем
 _PACK_TAIL_RE  = re.compile(r':\s*\d+(?:\s*/\s*\d+)?\s*$')    # ":6/24" в конце — кор/паллета
@@ -460,9 +466,18 @@ def _extract_ply_rolls(name: str) -> tuple[str, str]:
 
 
 _SHADE_RE = re.compile(r'\b(\d+\.\d+|\d{1,2}-\d{2,})\b')
+_MODEL_NUM_RE = re.compile(
+    r'(?<![,.])\b(\d{1,2})\b(?![.,]\d)'
+    r'(?!\s*(?:мл|л|г|гр?|кг|шт|уп|мг|ml|l|g|kg|pcs|pc))',
+    re.IGNORECASE,
+)
 
 def _spec_shade_sig(name: str) -> frozenset:
-    return frozenset(m.group(1) for m in _SHADE_RE.finditer(_strip_meta(name)))
+    s = _strip_meta(name)
+    shades = frozenset(m.group(1) for m in _SHADE_RE.finditer(s))
+    # убираем паки и размеры, оставшиеся числа — номера моделей (Flex 5, 3-в-1...)
+    s2 = _SIZE_EXTRACT_RE.sub(' ', _REV_PACK_RE.sub(' ', _PACK_RE.sub(' ', s)))
+    return shades | frozenset(m.group(1) for m in _MODEL_NUM_RE.finditer(s2))
 
 
 _COUNT_RE = re.compile(
@@ -476,13 +491,32 @@ def _spec_count_sig(name: str) -> frozenset:
         for m in _COUNT_RE.finditer(_strip_meta(name))
     )
 
+from functools import lru_cache
+
+_MORPH = None
+
+def _morph():
+    global _MORPH
+    if _MORPH is None:
+        try:
+            import pymorphy3
+            _MORPH = pymorphy3.MorphAnalyzer()
+        except ImportError:
+            _MORPH = False
+    return _MORPH
+
+@lru_cache(maxsize=100_000)
+def _lemma(tok: str) -> str:
+    m = _morph()
+    return m.parse(tok)[0].normal_form if m else tok
+
 def _match_tokens(name: str) -> set:
     s = _strip_meta(name).lower().replace('ё', 'е')
-    s = _JUNK_TOKEN_RE.sub(' ', s)   # "акция"/"новинка" не должны различать товары
-    s = _EMBED_SIZE_RE.sub(' ', s)   # "успокаивающая20г" → "успокаивающая"
+    s = _JUNK_TOKEN_RE.sub(' ', s)
+    s = _EMBED_SIZE_RE.sub(' ', s)
     s = _JUNK_RE.sub(' ', s)
     s = _NUM_RE.sub(' ', s)
-    return {t for t in s.split() if len(t) >= 3}
+    return {_lemma(t) for t in s.split() if len(t) >= 3}
 
 
 def _doc_freq(names: list[str]) -> Counter:
@@ -587,7 +621,7 @@ def _fuzzy_matches(
         return result
 
     log_fn(f"  [Fuzzy] матчинг {len(new_names)} новых товаров (порог={threshold})")
-    norms = [_norm_for_match(n) for n in new_names]
+    norms = [_norm_for_tfidf(n) for n in new_names]
     freq  = Counter(str(n).strip() for n in item_names if pd.notna(n))
     pairs: list[tuple[int, int]] = []
     method = "difflib"
