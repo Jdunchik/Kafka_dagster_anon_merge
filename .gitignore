@@ -1,0 +1,60 @@
+# ── Виртуальное окружение ───────────────────────────
+.venv/
+venv/
+env/
+
+# ── Python ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ── PyCharm ─────────────────────────────────────────
+.idea/
+
+# ── macOS ───────────────────────────────────────────
+.DS_Store
+
+# ── Dagster (локальное хранилище/логи) ──────────────
+.dagster/
+dagster_home/
+tmp*/
+history/
+storage/
+schedules/
+logs/
+
+# ── Сгенерированные кэши (СОДЕРЖАТ ЧУВСТВИТЕЛЬНЫЕ ДАННЫЕ) ──
+# mappings.json — обратимое соответствие реальных имён фейковым.
+# Это "ключ" для деанонимизации — НИКОГДА не коммитить.
+mappings.json
+product_matches.json
+config.json
+
+# ── Данные (исходные таблицы и результаты) ──────────
+data/
+raw/
+merged/
+archive/
+*.xlsx
+*.xls
+*.xlsb
+*.csv
+*.tsv
+
+match_decisions.jsonl
+review_pairs.json
+suggested_patch.json
+ai_context.json
+
+# ── Кэши и локальные пресеты ──────────────────────────────────────────────────
+category_cache.json
+analytics_presets.json
+failed
+
+# ── Секреты ──────────────────────────────────────────────────────────────────
+.env
+mappings.json
+
+# ── Dagster temp ─────────────────────────────────────────────────────────────
+.tmp*/
+.dagster/
