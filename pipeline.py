@@ -521,8 +521,7 @@ def read_and_anonymize(
         auto_matches = build_name_matches(pairs, log_fn=log_fn)
         manual       = load_name_matches()          # ручные правки — приоритет
         all_matches  = {**auto_matches, **manual}
-        if auto_matches:
-            save_name_matches(all_matches)
+        save_name_matches(all_matches)              # сохраняем всегда, даже если авто = {}
         for _, df, col in raw_frames:
             apply_name_matches(df, col, all_matches)
 
