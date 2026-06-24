@@ -1,3 +1,4 @@
+import re
 import sys
 import json
 import time
@@ -93,11 +94,16 @@ ALIASES = {
                             "subject", "предмет", "категория", "category",
                             "group", "группа", "подкатегория"],
     "item_code":           ["код позиции", "код товара", "sku", "item_code",
-                            "артикул", "арт", "код поз"],
+                            "артикул", "арт", "код поз", "article",
+                            "product_id", "product_code", "код продукта"],
     "item_name":           ["наименование", "название товара", "товар",
                             "позиция", "item_name", "item", "наим", "назв",
                             "name", "full_name", "short_name", "номенклатура",
-                            "наименование номенклатуры", "товарная позиция"],
+                            "наименование номенклатуры", "товарная позиция",
+                            "product_name", "goods_name", "sku_name",
+                            "наименование товара", "название продукта",
+                            "наименование продукта", "наим товара",
+                            "наим продукта", "наименование позиции"],
     "brand":               ["бренд", "brand", "марка", "торговая марка", "brandname"],
     "manufacturer":        ["производитель", "произв", "пр-ль", "manufacturer", "mfr",
                             "producer", "изготовитель"],
@@ -110,9 +116,15 @@ ALIASES = {
     "barcode":             ["штриховой код", "штрихкод", "ean", "barcode",
                             "bar code", "код штрих", "баркод"],
     "qty_sold":            ["продажи в шт", "продажи в шт.", "qty", "qty_sold",
-                            "шт", "количество", "кол-во", "продажи в штуках"],
+                            "шт", "количество", "кол-во", "продажи в штуках",
+                            "quantity", "qty_pcs", "sold_qty", "продано",
+                            "продажи шт", "кол-во проданных", "продажи в натур",
+                            "реализация шт", "отгрузка шт"],
     "sales_rub":           ["продажи в руб", "продажи в руб.", "sales_rub",
-                            "выручка", "оборот", "продажи в рублях","sales"],
+                            "выручка", "оборот", "продажи в рублях", "sales",
+                            "revenue", "выручка от продаж", "реализация",
+                            "выручка от реализации", "оборот в руб",
+                            "сумма продаж", "реализация руб"],
     "cost_rub":            ["себестоимость", "себестоимсть",
                             "себестоимость в руб", "себестоимсть в руб",
                             "cost_rub", "cost", "себес", "закупка",
@@ -350,25 +362,118 @@ def _normalize(col: str) -> str:
     for suffix in [" с ндс", " без ндс", ". с ндс", " с nds", " incl. vat", " excl. vat"]:
         if s.endswith(suffix):
             s = s[:-len(suffix)]
-    return s.rstrip(". ,")
+    s = s.rstrip(". ,")
+    # убрать всю пунктуацию и лишние пробелы для сравнения
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _alias_norm(s: str) -> str:
+    """Нормализация алиаса: нижний регистр, '_' → пробел, без пунктуации."""
+    s = s.lower().replace("_", " ")
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _col_score(col_norm: str, aliases: list) -> float:
+    """
+    Score совпадения нормализованного имени колонки с одним из алиасов.
+
+    Уровни (max):
+      1. Точное совпадение        → 1.0
+      2. Алиас ⊆ col (подстрока)  → 0.60–1.0 (пропорц. длине алиаса)
+         Только алиасы длиной ≥ 5 символов, чтобы избежать "ed"⊆"name"
+      3. Token-set Jaccard        → 0.0–1.0
+
+    НЕ используем «col ⊆ алиас»: "name" ⊆ "store_name" давало ложные матчи.
+    """
+    col_toks = set(col_norm.split())
+    best = 0.0
+    for alias in aliases:
+        a = _alias_norm(alias)
+        if not a:
+            continue
+        if col_norm == a:
+            return 1.0
+        # алиас является подстрокой названия колонки
+        # требуем покрытие > 50%: "quantity" (8) в "packaging quantity" (19) = 42% → нет
+        if len(a) >= 5 and a in col_norm:
+            coverage = len(a) / max(len(col_norm), 1)
+            if coverage >= 0.50:
+                best = max(best, 0.6 + 0.4 * coverage)
+        # Jaccard по токенам
+        a_toks = set(a.split())
+        if a_toks and col_toks:
+            j = len(col_toks & a_toks) / len(col_toks | a_toks)
+            best = max(best, j)
+    return best
+
 
 def fuzzy_map(actual_cols: list) -> dict:
-    """Returns {actual_col: canonical_name}"""
-    alias_to_canon = {
-        alias: cname
-        for cname, aliases in ALIASES.items()
-        for alias in aliases
-    }
-    result = {}
+    """
+    {actual_col → canonical_field}
+
+    Проход 1 — точный алиас: каждая колонка сравнивается со всеми алиасами
+      построчно.  Колонка, попавшая в точный матч, больше НЕ участвует
+      в нечётком поиске (даже если «своё» поле уже занято).
+
+    Проход 2 — fuzzy (только колонки без точного алиаса):
+      _col_score ≥ 0.60, жадное назначение по убыванию score.
+    """
+    import heapq
+
+    alias_to_canon = {_alias_norm(alias): cname
+                      for cname, aliases in ALIASES.items()
+                      for alias in aliases}
+
+    result: dict   = {}
+    used_canon     = set()
+    exact_cols     = set()   # колонки с точным алиасом (даже если поле занято)
+
+    # Проход 1: точный матч
     for col in actual_cols:
         norm = _normalize(col)
         if norm in alias_to_canon:
-            result[col] = alias_to_canon[norm]
+            exact_cols.add(col)
+            cname = alias_to_canon[norm]
+            if cname not in used_canon:
+                result[col] = cname
+                used_canon.add(cname)
+
+    # Проход 2: fuzzy только для колонок без точного алиаса
+    scores: dict = {}
+    for col in actual_cols:
+        if col in result or col in exact_cols:
             continue
-        matches = difflib.get_close_matches(norm, alias_to_canon.keys(), n=1, cutoff=0.72)
-        if matches:
-            result[col] = alias_to_canon[matches[0]]
+        norm = _normalize(col)
+        cands = []
+        for cname, aliases in ALIASES.items():
+            if cname in used_canon:
+                continue
+            s = _col_score(norm, aliases)
+            if s >= 0.60:
+                cands.append((s, cname))
+        if cands:
+            scores[col] = sorted(cands, reverse=True)
+
+    heap = []
+    for col, cands in scores.items():
+        if cands:
+            heapq.heappush(heap, (-cands[0][0], col, cands[0][1]))
+
+    while heap:
+        neg_s, col, cname = heapq.heappop(heap)
+        if col in result or cname in used_canon:
+            remaining = [(s, c) for s, c in scores.get(col, [])
+                         if c not in used_canon and col not in result]
+            if remaining:
+                heapq.heappush(heap, (-remaining[0][0], col, remaining[0][1]))
+            continue
+        result[col] = cname
+        used_canon.add(cname)
+
     return result
+
 
 def get_col_map(df: pd.DataFrame) -> dict:
     raw = fuzzy_map(list(df.columns))
