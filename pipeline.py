@@ -227,12 +227,19 @@ def read_table(path: Path) -> pd.DataFrame:
         return pd.read_excel(path, engine="xlrd")
     elif ext == ".xlsb":
         return pd.read_excel(path, engine="pyxlsb")
-    elif ext == ".csv":
-        sample = path.read_text(encoding="utf-8", errors="replace")[:4096]
-        sep = ";" if sample.count(";") > sample.count(",") else ","
-        return pd.read_csv(path, sep=sep)
-    elif ext == ".tsv":
-        return pd.read_csv(path, sep="\t")
+    elif ext in (".csv", ".tsv"):
+        sep = "\t" if ext == ".tsv" else None   # None → sniff below
+        for enc in ("utf-8-sig", "cp1251", "latin-1"):
+            try:
+                raw = path.read_bytes()
+                raw.decode(enc)                 # probe
+                if sep is None:
+                    sample = raw.decode(enc)[:4096]
+                    sep = ";" if sample.count(";") > sample.count(",") else ","
+                return pd.read_csv(path, sep=sep, encoding=enc)
+            except (UnicodeDecodeError, ValueError):
+                continue
+        raise ValueError(f"Не удалось определить кодировку: {path.name}")
     elif ext == ".parquet":
         return pd.read_parquet(path)
     raise ValueError(f"Неподдерживаемый формат: {ext}")
