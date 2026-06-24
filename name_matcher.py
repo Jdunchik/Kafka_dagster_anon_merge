@@ -27,8 +27,8 @@ from pathlib import Path
 import pandas as pd
 
 NAME_MATCHES_PATH = Path("name_matches.json")
-# Порог 0.90: выше максимального score среди всех известных ложных пар (0.884)
-THRESHOLD = 0.90
+# Порог 0.95: выше максимального score среди всех известных ложных пар (0.9091)
+THRESHOLD = 0.95
 
 # Объём И штучные единицы в ключе блокировки:
 # «Mach3 2шт» и «Fusion 5шт» → разные блоки → никогда не сравниваются
@@ -36,10 +36,10 @@ _VOL_RE = re.compile(
     r'(\d+[.,]?\d*)\s*(мл|л|г|гр|кг|шт|уп|пак|рул|ml|l|g|kg|pcs)\b', re.I
 )
 
-# Суффикс поставщика «(КодПост):4/20» или «:6/12» в конце строки —
-# одинаков для ВСЕХ товаров одного листа, раздувает seq_ratio при сравнении
+# Суффикс поставщика: «(КодПост):N», «(КодПост):N/N», «:N», «:N/N» в конце строки.
+# Все эти форматы — кол-во упаковок, не часть названия.
 _META_RE = re.compile(
-    r'\s*\([^)]+\)\s*:\s*\d[\d/]*\s*$|\s*:\s*\d+/\d+\s*$'
+    r'\s*\([^)]+\)\s*:\s*\d[\d/]*\s*$|\s*:\s*\d[\d/]*\s*$'
 )
 
 _CYR = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
@@ -141,7 +141,11 @@ def build_name_matches(
     freq   = Counter(n for n, _ in items)
     blocks: dict = defaultdict(list)
     for name, brand in items:
-        key = (str(brand).strip().lower(), extract_volume(name))
+        # Первый токен нормализованного названия — надёжнее колонки brand,
+        # т.к. в разных файлах brand может быть бренд или поставщик.
+        norm_toks = _normalize(name).split()
+        brand_key = norm_toks[0] if norm_toks else str(brand).strip().lower()
+        key = (brand_key, extract_volume(name))
         blocks[key].append(name)
 
     multi = [v for v in blocks.values() if len(set(v)) > 1]
