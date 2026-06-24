@@ -3,6 +3,7 @@ pandas>=2.0
 openpyxl>=3.1
 xlrd>=2.0          # .xls
 pyxlsb>=1.0        # .xlsb
+pyarrow>=14.0      # .parquet
 
 # ── anonymization ──────────────────────────────────────────────────────────────
 faker>=24.0

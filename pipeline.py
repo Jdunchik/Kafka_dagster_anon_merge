@@ -21,7 +21,7 @@ CONFIG_PATH   = Path("config.json")
 MAPPINGS_PATH = Path("mappings.json")
 PRICE_COEF     = 1.117
 QTY_SHIFT      = 2
-SUPPORTED_EXTS = {".xlsx", ".xls", ".xlsm", ".xlsb", ".csv", ".tsv"}
+SUPPORTED_EXTS = {".xlsx", ".xls", ".xlsm", ".xlsb", ".csv", ".tsv", ".parquet"}
 
 CANONICAL = {
     "week":                "keep",
@@ -233,6 +233,8 @@ def read_table(path: Path) -> pd.DataFrame:
         return pd.read_csv(path, sep=sep)
     elif ext == ".tsv":
         return pd.read_csv(path, sep="\t")
+    elif ext == ".parquet":
+        return pd.read_parquet(path)
     raise ValueError(f"Неподдерживаемый формат: {ext}")
 
 def _format_xlsx(path: Path):

@@ -2,18 +2,21 @@
 name_matcher.py — унификация названий товаров без LLM.
 
 Алгоритм:
-  1. Блокировка по (бренд + объём) — все пары внутри блока имеют одинаковые
-     бренд и фасовку, сравниваем только дескриптор.
-  2. Нормализация: нижний регистр, очистка пунктуации, транслитерация кирилл.→лат.
+  1. Блокировка по (бренд + объём/кол-во) — пары сравниваются только внутри
+     одного блока (одинаковый бренд + фасовка/шт).
+  2. Нормализация: нижний регистр, удаление суффиксов поставщика «(код):N/N»,
+     очистка пунктуации, транслитерация кирилл.→лат.
   3. Попарная схожесть внутри блока:
        • token-set Jaccard  — порядок слов не важен
-       • SequenceMatcher    — опечатки, сокращения («colour» vs «color», «аква» vs «aqua»)
-     score = max(jaccard, seq_ratio * 0.9)
+       • SequenceMatcher    — опечатки/сокращения
+     score = max(jaccard, seq_ratio × 0.9)   — ТОЛЬКО для true-positive проверки
   4. Union-Find кластеризация пар с score ≥ THRESHOLD.
   5. Canonical = самое частое название в кластере, при равенстве — самое длинное.
 
-Публичный API полностью совместим со старой LLM-версией
-(параметр model= принимается но игнорируется).
+Стратегия: КОНСЕРВАТИВНАЯ — лучше пропустить правильное слияние,
+чем склеить разные товары (разные линейки, вкусы, оттенки, типы).
+
+Публичный API совместим со старой LLM-версией (model= принимается, игнорируется).
 """
 import re
 import json
@@ -24,9 +27,20 @@ from pathlib import Path
 import pandas as pd
 
 NAME_MATCHES_PATH = Path("name_matches.json")
-THRESHOLD = 0.78   # порог схожести (0..1); выше — строже
+# Консервативный порог: лучше false-negative, чем false-positive
+THRESHOLD = 0.85
 
-_VOL_RE = re.compile(r'(\d+[.,]?\d*)\s*(мл|л|г|гр|кг|ml|l|g|kg)\b', re.I)
+# Объём И штучные единицы в ключе блокировки:
+# «Mach3 2шт» и «Fusion 5шт» → разные блоки → никогда не сравниваются
+_VOL_RE = re.compile(
+    r'(\d+[.,]?\d*)\s*(мл|л|г|гр|кг|шт|уп|пак|рул|ml|l|g|kg|pcs)\b', re.I
+)
+
+# Суффикс поставщика «(КодПост):4/20» или «:6/12» в конце строки —
+# одинаков для ВСЕХ товаров одного листа, раздувает seq_ratio при сравнении
+_META_RE = re.compile(
+    r'\s*\([^)]+\)\s*:\s*\d[\d/]*\s*$|\s*:\s*\d+/\d+\s*$'
+)
 
 _CYR = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 _LAT = ["a","b","v","g","d","e","e","zh","z","i","y","k","l","m","n","o","p",
@@ -41,6 +55,7 @@ def _translit(s: str) -> str:
 
 def _normalize(name: str) -> str:
     s = str(name).lower().strip()
+    s = _META_RE.sub("", s)           # убрать «(Код):4/20» в конце
     s = re.sub(r"[^\w\s]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return _translit(s)
@@ -85,10 +100,11 @@ class _UF:
 def _norm_vol(num: str, unit: str) -> str:
     v = float(num.replace(",", "."))
     u = unit.lower()
-    if u in ("л", "l"):    return f"{int(round(v * 1000))}ml"
-    if u in ("мл", "ml"):  return f"{int(round(v))}ml"
-    if u in ("кг", "kg"):  return f"{int(round(v * 1000))}g"
-    return f"{int(round(v))}g"
+    if u in ("л", "l"):              return f"{int(round(v * 1000))}ml"
+    if u in ("мл", "ml"):            return f"{int(round(v))}ml"
+    if u in ("кг", "kg"):            return f"{int(round(v * 1000))}g"
+    if u in ("г", "гр", "g"):        return f"{int(round(v))}g"
+    return f"{int(round(v))}pcs"     # шт / уп / пак / рул / pcs
 
 def extract_volume(name: str) -> str:
     vols = {_norm_vol(m.group(1), m.group(2)) for m in _VOL_RE.finditer(str(name))}

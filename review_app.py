@@ -194,19 +194,25 @@ def tab_run(cfg):
     files = collect_source_files(in_dir) if in_dir.exists() else []
 
     st.markdown("**Этапы обработки**")
-    tg = st.columns(2)
+    tg = st.columns(3)
     cfg["categorize"] = tg[0].toggle(
         "Категоризация", value=cfg["categorize"], key="run_categorize",
-        help="Присвоение целевой категории каждому товару")
+        help="Присвоение целевой категории каждому товару по словарям. Работает мгновенно, без ИИ.")
     cfg["anonymize"] = tg[1].toggle(
         "Обезличивание", value=cfg["anonymize"], key="run_anonymize",
-        help="Маскировка магазинов, брендов, компаний и товаров")
+        help="Маскировка магазинов, брендов, компаний и товаров.")
+    cfg["name_match"] = tg[2].toggle(
+        "Унификация наименований", value=cfg.get("name_match", False), key="run_name_match",
+        help="Объединяет разные написания одного товара от разных поставщиков "
+             "в единое каноническое наименование (canonical_name). "
+             "Работает без ИИ — fuzzy-сравнение по бренду и объёму.")
     save_config(cfg)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Исходных файлов", len(files))
-    c2.metric("Категоризация", "Включена" if cfg["categorize"] else "Отключена")
-    c3.metric("Обезличивание", "Включено" if cfg["anonymize"] else "Отключено")
+    c2.metric("Категоризация", "Включена" if cfg["categorize"] else "Выкл.")
+    c3.metric("Обезличивание", "Включено" if cfg["anonymize"] else "Выкл.")
+    c4.metric("Унификация", "Включена" if cfg.get("name_match") else "Выкл.")
 
     if not files:
         st.warning(f"В каталоге «{cfg['input_folder']}» нет поддерживаемых файлов. "
@@ -224,10 +230,6 @@ def tab_run(cfg):
                                   help="Переместить обработанные файлы в каталог архива")
 
     if run_full:
-        if cfg["name_match"] and not _ollama_ok(cfg["model"]):
-            st.error("Сопоставление наименований включено, но сервис Ollama недоступен. "
-                     "Отключите этап в настройках или запустите сервис.")
-            return
 
         logbox = st.empty()
         logs = []
@@ -1339,7 +1341,7 @@ def tab_state():
         arch_f = gc2[1].text_input("Архив", cfg["archive_folder"])
 
         st.markdown("**Этапы обработки**")
-        tc = st.columns(2)
+        tc = st.columns(3)
         v_cat  = tc[0].toggle(
             "Категоризация", value=cfg["categorize"],
             help="Автоматически присваивает каждому товару целевую категорию "
@@ -1348,6 +1350,11 @@ def tab_state():
             "Обезличивание", value=cfg["anonymize"],
             help="Заменяет реальные названия магазинов, адреса, бренды, компании "
                  "и товары на сгенерированные, а цены и количества — на изменённые.")
+        v_match = tc[2].toggle(
+            "Унификация наименований", value=cfg.get("name_match", False),
+            help="Объединяет разные написания одного товара от разных поставщиков "
+                 "в единое каноническое наименование (canonical_name). "
+                 "Использует fuzzy-сравнение по бренду и объёму — без ИИ.")
         v_agg  = st.toggle(
             "Агрегация после консолидации", value=cfg["aggregate_after_merge"],
             help="Схлопывает одинаковые строки в одну, суммируя числовые метрики "
@@ -1365,6 +1372,7 @@ def tab_state():
             "output_folder": out_f.strip() or "merged",
             "archive_folder": arch_f.strip() or "archive",
             "categorize": v_cat, "anonymize": v_anon,
+            "name_match": v_match,
             "aggregate_after_merge": v_agg,
         }
         for f in (new["input_folder"], new["category_folder"],
@@ -1689,6 +1697,7 @@ if not _pipe_err and "_apply_cfg" in st.session_state:
         "sb_cat": _pend.get("category_folder"),
         "run_categorize": _pend.get("categorize"),
         "run_anonymize": _pend.get("anonymize"),
+        "run_name_match": _pend.get("name_match"),
         "sb_aggregate": _pend.get("aggregate_after_merge"),
     }
     for _k, _v in _sync.items():
