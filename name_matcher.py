@@ -9,7 +9,7 @@ name_matcher.py — унификация названий товаров без 
   3. Попарная схожесть внутри блока:
        • token-set Jaccard  — порядок слов не важен
        • SequenceMatcher    — опечатки/сокращения
-     score = max(jaccard, seq_ratio × 0.9)   — ТОЛЬКО для true-positive проверки
+     score = min(jaccard, seq_ratio × 0.9)   — оба обязаны быть высокими
   4. Union-Find кластеризация пар с score ≥ THRESHOLD.
   5. Canonical = самое частое название в кластере, при равенстве — самое длинное.
 
@@ -55,7 +55,8 @@ def _translit(s: str) -> str:
 
 def _normalize(name: str) -> str:
     s = str(name).lower().strip()
-    s = _META_RE.sub("", s)           # убрать «(Код):4/20» в конце
+    s = _META_RE.sub("", s)               # убрать «(Код):4/20» в конце
+    s = re.sub(r"\+", " plus ", s)        # «Super+» → «Super plus» (отдельный токен)
     s = re.sub(r"[^\w\s]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return _translit(s)
@@ -70,7 +71,10 @@ def _similarity(a: str, b: str) -> float:
     na, nb = _normalize(a), _normalize(b)
     j   = _jaccard(na, nb)
     seq = difflib.SequenceMatcher(None, na, nb).ratio()
-    return max(j, seq * 0.9)
+    # min(): оба показателя должны быть высокими.
+    # max() позволяет seq доминировать при длинной общей подстроке
+    # («жен» vs «муж» дают seq=0.96 → ложный merge). min() это исключает.
+    return min(j, seq * 0.9)
 
 
 # ── Union-Find ─────────────────────────────────────────────────────────────────
