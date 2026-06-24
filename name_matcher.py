@@ -9,7 +9,7 @@ name_matcher.py — унификация названий товаров без 
   3. Попарная схожесть внутри блока:
        • token-set Jaccard  — порядок слов не важен
        • SequenceMatcher    — опечатки/сокращения
-     score = min(jaccard, seq_ratio × 0.9)   — оба обязаны быть высокими
+     score = max(jaccard, seq_ratio × 0.9), порог 0.90
   4. Union-Find кластеризация пар с score ≥ THRESHOLD.
   5. Canonical = самое частое название в кластере, при равенстве — самое длинное.
 
@@ -27,8 +27,8 @@ from pathlib import Path
 import pandas as pd
 
 NAME_MATCHES_PATH = Path("name_matches.json")
-# Консервативный порог: лучше false-negative, чем false-positive
-THRESHOLD = 0.85
+# Порог 0.90: выше максимального score среди всех известных ложных пар (0.884)
+THRESHOLD = 0.90
 
 # Объём И штучные единицы в ключе блокировки:
 # «Mach3 2шт» и «Fusion 5шт» → разные блоки → никогда не сравниваются
@@ -71,10 +71,7 @@ def _similarity(a: str, b: str) -> float:
     na, nb = _normalize(a), _normalize(b)
     j   = _jaccard(na, nb)
     seq = difflib.SequenceMatcher(None, na, nb).ratio()
-    # min(): оба показателя должны быть высокими.
-    # max() позволяет seq доминировать при длинной общей подстроке
-    # («жен» vs «муж» дают seq=0.96 → ложный merge). min() это исключает.
-    return min(j, seq * 0.9)
+    return max(j, seq * 0.9)
 
 
 # ── Union-Find ─────────────────────────────────────────────────────────────────
