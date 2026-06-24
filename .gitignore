@@ -28,6 +28,7 @@ logs/
 # Это "ключ" для деанонимизации — НИКОГДА не коммитить.
 mappings.json
 product_matches.json
+name_matches.json
 config.json
 
 # ── Данные (исходные таблицы и результаты) ──────────
