@@ -27,11 +27,12 @@ from pathlib import Path
 import pandas as pd
 
 NAME_MATCHES_PATH = Path("name_matches.json")
-# 0.85: оптимальный баланс.
-# seq*0.9 ≤ 0.9 всегда → решает только Jaccard-ветка при score ≥ 0.9.
-# _META_RE теперь стрипает «:N» → единственный известный ложный матч
-# («лимон 460мл:6 vs 460мл:6») после стрипа скорит ≈ 0.54, безопасно.
-THRESHOLD = 0.85
+# Только Jaccard токен-сетов после нормализации.
+# SequenceMatcher убран: он давал ложные матчи на длинных строках
+# с минимальными числовыми различиями (36-45лет vs 46-55лет → ratio≈0.96).
+# Jaccard нечувствителен к единственному отличному токену.
+# Порог 0.90: 1 лишний токен из 7 → J=6/7=0.857 < 0.90 → нет матча.
+THRESHOLD = 0.90
 
 # Объём И штучные единицы в ключе блокировки:
 # «Mach3 2шт» и «Fusion 5шт» → разные блоки → никогда не сравниваются
@@ -71,10 +72,7 @@ def _jaccard(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 def _similarity(a: str, b: str) -> float:
-    na, nb = _normalize(a), _normalize(b)
-    j   = _jaccard(na, nb)
-    seq = difflib.SequenceMatcher(None, na, nb).ratio()
-    return max(j, seq * 0.9)
+    return _jaccard(_normalize(a), _normalize(b))
 
 
 # ── Union-Find ─────────────────────────────────────────────────────────────────

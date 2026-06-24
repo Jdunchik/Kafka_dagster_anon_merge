@@ -511,19 +511,16 @@ def read_and_anonymize(
         for _, df, col in raw_frames:
             apply_categories(df, col, cats, model=model, log_fn=log_fn)
 
-    # ── Шаг B: мэтчинг названий (авто-fuzzy + ручные правки из name_matches.json) ──
+    # ── Шаг B: мэтчинг названий (авто-fuzzy, пересчитывается каждый раз) ──────────
     if name_match:
         from name_matcher import (build_name_matches, items_from_frames,
-                                   load_name_matches, save_name_matches,
-                                   apply_name_matches)
+                                   save_name_matches, apply_name_matches)
         log_fn("🔗  Мэтчинг названий: анализ схожих наименований...")
-        pairs        = items_from_frames(raw_frames)
-        auto_matches = build_name_matches(pairs, log_fn=log_fn)
-        manual       = load_name_matches()          # ручные правки — приоритет
-        all_matches  = {**auto_matches, **manual}
-        save_name_matches(all_matches)              # сохраняем всегда, даже если авто = {}
+        pairs   = items_from_frames(raw_frames)
+        matches = build_name_matches(pairs, log_fn=log_fn)
+        save_name_matches(matches)          # перезаписываем — нет накопления старых матчей
         for _, df, col in raw_frames:
-            apply_name_matches(df, col, all_matches)
+            apply_name_matches(df, col, matches)
 
     # ── Pass 2: transform (+anon при anonymize=True) ───────────────────────────
     frames: list[tuple[str, pd.DataFrame]] = []
