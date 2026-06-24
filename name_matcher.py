@@ -7,9 +7,8 @@ name_matcher.py — унификация названий товаров без 
   2. Нормализация: нижний регистр, удаление суффиксов поставщика «(код):N/N»,
      очистка пунктуации, транслитерация кирилл.→лат.
   3. Попарная схожесть внутри блока:
-       • token-set Jaccard  — порядок слов не важен
-       • SequenceMatcher    — опечатки/сокращения
-     score = max(jaccard, seq_ratio × 0.9), порог 0.85
+       • token-set Jaccard  — порядок слов не важен, 1 разный токен → не матч
+     score = jaccard, порог 0.90
   4. Union-Find кластеризация пар с score ≥ THRESHOLD.
   5. Canonical = самое частое название в кластере, при равенстве — самое длинное.
 
@@ -20,7 +19,6 @@ name_matcher.py — унификация названий товаров без 
 """
 import re
 import json
-import difflib
 from collections import Counter, defaultdict
 from pathlib import Path
 
